@@ -23,5 +23,5 @@ export const myExtends = (SuperType: Function, SubType: Function) => {
 // console.log(dog.breed)   // Expected: "Labrador"
 // console.log(dog.greet()) // Expected: "Hello, Rex"
 // console.log(dog.bark())  // Expected: "Rex says Woof!"
-// console.log(dog instanceof Animal) // Expected: true
+// console.log(dog instanceof Animal); // Expected: true
 // (DogExtended as any).print() // Expected: "Animal"
