@@ -1,6 +1,6 @@
 import './reset.css'
 import css from './app.module.css'
-import { useState, useMemo } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import {
   ToastExample,
   ToastVanillaExample,
@@ -128,7 +128,7 @@ import {
   GoogleSheetStudentVanillaExample,
 } from './problems/62-google-sheet-ux/google-sheet.example.tsx'
 
-// Import problem markdown files (Bun text imports)
+// Import problem markdown files as text
 import toastProblem from './problems/38-toast/problem.md' with { type: 'text' }
 import checkboxProblem from './problems/37-nested-checkboxes/problem.md' with { type: 'text' }
 import accordionProblem from './problems/21-accordion/problem.md' with { type: 'text' }
@@ -188,7 +188,13 @@ const CodeBlock = ({ className, children, ...props }: React.HTMLAttributes<HTMLE
         style={vscDarkPlus}
         language={match[1]}
         PreTag="div"
-        customStyle={{ borderRadius: '8px', fontSize: '0.9rem' }}
+        customStyle={{
+          borderRadius: '10px',
+          fontSize: '0.85rem',
+          margin: '0 0 1.25rem',
+          padding: '1rem 1.1rem',
+          fontFamily: "'IBM Plex Mono', ui-monospace, monospace",
+        }}
       >
         {code}
       </SyntaxHighlighter>
@@ -205,7 +211,7 @@ const CodeBlock = ({ className, children, ...props }: React.HTMLAttributes<HTMLE
 // Helper to create a problem overview component
 const createProblemOverview = (markdownContent: string) => {
   return () => (
-    <div className={css.markdownContent} style={{ padding: '20px' }}>
+    <div className={css.markdownContent}>
       <ReactMarkdown remarkPlugins={[remarkGfm]} components={{ code: CodeBlock }}>
         {markdownContent}
       </ReactMarkdown>
@@ -215,6 +221,15 @@ const createProblemOverview = (markdownContent: string) => {
 
 type TDifficulty = 'warm-up' | 'easy' | 'medium' | 'hard' | 'extreme'
 type TVariantType = 'overview' | 'react' | 'vanilla' | 'studentReact' | 'studentVanilla' | 'example'
+
+const VARIANT_LABELS: Record<TVariantType, string> = {
+  overview: 'Problem Overview',
+  react: 'Reference · React',
+  vanilla: 'Reference · Vanilla',
+  studentReact: 'Student · React',
+  studentVanilla: 'Student · Vanilla',
+  example: 'Example',
+}
 
 type TVariant = {
   component: React.ComponentType
@@ -612,6 +627,11 @@ const SECTIONS = {
   },
 } as const
 
+const PROBLEM_COUNT = Object.values(SECTIONS).reduce(
+  (sum, section) => sum + Object.keys(section.items).length,
+  0,
+)
+
 // Helper to find a component by selection id (format: "problemId:variant")
 const findComponentBySelection = (selectionId: string): React.ComponentType | undefined => {
   const [problemId, variant] = selectionId.split(':') as [string, TVariantType]
@@ -629,7 +649,83 @@ const isValidSelection = (selectionId: string): boolean => {
   return findComponentBySelection(selectionId) !== undefined
 }
 
-const NotFound = () => <div>Not found</div>
+const findSectionKey = (problemId: string): string | undefined => {
+  return Object.entries(SECTIONS).find(([, section]) => problemId in section.items)?.[0]
+}
+
+const problemLabel = (name: string, index: number) =>
+  /^\d/.test(name) ? name : `${index + 1}. ${name}`
+
+const findSelection = (selectionId: string) => {
+  const [problemId, variant] = selectionId.split(':') as [string, TVariantType]
+  for (const section of Object.values(SECTIONS)) {
+    const entries = Object.entries(section.items)
+    const index = entries.findIndex(([id]) => id === problemId)
+    if (index === -1) continue
+    const problem = entries[index]?.[1]
+    if (!problem) continue
+    return {
+      problemId,
+      label: problemLabel(problem.name, index),
+      variantLabel: VARIANT_LABELS[variant],
+    }
+  }
+  return undefined
+}
+
+const readMarked = (): Record<string, boolean> => {
+  const stored = localStorage.getItem('sidebarMarkedProblems')
+  if (!stored) return {}
+  try {
+    const parsed: unknown = JSON.parse(stored)
+    if (!parsed || typeof parsed !== 'object') return {}
+    return parsed as Record<string, boolean>
+  } catch {
+    return {}
+  }
+}
+
+const COMPACT_QUERY = '(max-width: 840px)'
+
+const NotFound = () => (
+  <div className={css.notFound}>
+    <p className={css.notFoundKicker}>Missing example</p>
+    <h2>This example is not in the workshop.</h2>
+  </div>
+)
+
+const MarkButton = ({
+  checked,
+  label,
+  onToggle,
+}: {
+  checked: boolean
+  label: string
+  onToggle: () => void
+}) => (
+  <button
+    type="button"
+    className={checked ? `${css.mark} ${css.markChecked}` : css.mark}
+    role="checkbox"
+    aria-checked={checked}
+    aria-label={checked ? `Unmark ${label}` : `Mark ${label} done`}
+    onClick={(event) => {
+      event.stopPropagation()
+      onToggle()
+    }}
+  >
+    <svg viewBox="0 0 16 16" aria-hidden="true">
+      <path
+        d="M3.5 8.2 L6.4 11.2 L12.5 4.8"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="2"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+    </svg>
+  </button>
+)
 
 export default function App() {
   // Read initial selection from URL param
@@ -665,18 +761,95 @@ export default function App() {
   }
 
   const [selectedId, setSelectedId] = useState<string>(getInitialExample)
-  const [openSections, setOpenSections] = useState<Record<string, boolean>>(getInitialOpenSections)
-  const [openProblems, setOpenProblems] = useState<Record<string, boolean>>(getInitialOpenProblems)
+  const [openSections, setOpenSections] = useState<Record<string, boolean>>(() => {
+    const stored = getInitialOpenSections()
+    const sectionKey = findSectionKey(getInitialExample().split(':')[0] ?? '')
+    return sectionKey ? { ...stored, [sectionKey]: true } : stored
+  })
+  const [openProblems, setOpenProblems] = useState<Record<string, boolean>>(() => {
+    const stored = getInitialOpenProblems()
+    const problemId = getInitialExample().split(':')[0] ?? ''
+    return { ...stored, [problemId]: true }
+  })
+  const [query, setQuery] = useState('')
+  const [marked, setMarked] = useState<Record<string, boolean>>(readMarked)
+  const [isCompact, setIsCompact] = useState(() => window.matchMedia(COMPACT_QUERY).matches)
+  const [navOpen, setNavOpen] = useState(false)
+  const normalizedQuery = query.trim().toLowerCase()
+  const menuRef = useRef<HTMLButtonElement>(null)
+  const searchRef = useRef<HTMLInputElement>(null)
 
   const SelectedComponent = useMemo(() => findComponentBySelection(selectedId), [selectedId])
+  const selection = useMemo(() => findSelection(selectedId), [selectedId])
+  const markedCount = Object.values(marked).filter(Boolean).length
+
+  useEffect(() => {
+    document.querySelector('[data-active="true"]')?.scrollIntoView({ block: 'nearest' })
+  }, [selectedId])
+
+  useEffect(() => {
+    const media = window.matchMedia(COMPACT_QUERY)
+    const onChange = () => {
+      setIsCompact(media.matches)
+      if (!media.matches) setNavOpen(false)
+    }
+    media.addEventListener('change', onChange)
+    return () => media.removeEventListener('change', onChange)
+  }, [])
+
+  useEffect(() => {
+    if (!navOpen) return
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        setNavOpen(false)
+        menuRef.current?.focus()
+      }
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [navOpen])
+
+  useEffect(() => {
+    if (navOpen && isCompact) searchRef.current?.focus()
+  }, [navOpen, isCompact])
 
   // Update URL when selection changes
   const handleSelectVariant = (problemId: string, variant: TVariantType) => {
     const newId = `${problemId}:${variant}`
     setSelectedId(newId)
+    const sectionKey = findSectionKey(problemId)
+    if (sectionKey) {
+      setOpenSections((prev) => {
+        if (prev[sectionKey]) return prev
+        const updated = { ...prev, [sectionKey]: true }
+        localStorage.setItem('sidebarOpenSections', JSON.stringify(updated))
+        return updated
+      })
+    }
+    setOpenProblems((prev) => {
+      if (prev[problemId]) return prev
+      const updated = { ...prev, [problemId]: true }
+      localStorage.setItem('sidebarOpenProblems', JSON.stringify(updated))
+      return updated
+    })
     const url = new URL(window.location.href)
     url.searchParams.set('example', newId)
     window.history.replaceState({}, '', url.toString())
+    if (isCompact) setNavOpen(false)
+  }
+
+  const toggleMarked = (problemId: string) => {
+    setMarked((prev) => {
+      const updated = { ...prev, [problemId]: !prev[problemId] }
+      if (!updated[problemId]) delete updated[problemId]
+      localStorage.setItem('sidebarMarkedProblems', JSON.stringify(updated))
+      return updated
+    })
+  }
+
+  const closeNav = () => {
+    setNavOpen(false)
+    menuRef.current?.focus()
   }
 
   // Handle section toggle and persist to localStorage
@@ -697,86 +870,219 @@ export default function App() {
     })
   }
 
-  return (
-    <div className={css.app}>
-      <div className={css.container}>
-        <div className={css.sidebar}>
-          {Object.entries(SECTIONS).map(([sectionKey, section]) => {
-            const showSeparator = sectionKey === 'components'
+  const visibleSections = Object.entries(SECTIONS)
+    .map(([sectionKey, section]) => {
+      const problems = Object.entries(section.items).map(([problemId, problem], index) => ({
+        problemId,
+        problem,
+        index,
+      }))
+      const visibleProblems =
+        normalizedQuery === ''
+          ? problems
+          : problems.filter(({ problem }) => problem.name.toLowerCase().includes(normalizedQuery))
+      return { sectionKey, section, visibleProblems }
+    })
+    .filter(
+      ({ section, visibleProblems }) =>
+        normalizedQuery === '' ||
+        visibleProblems.length > 0 ||
+        Object.keys(section.items).length === 0,
+    )
 
-            return (
+  const hasResults = visibleSections.some(({ visibleProblems }) => visibleProblems.length > 0)
+
+  return (
+    <div className={navOpen ? `${css.app} ${css.navOpen}` : css.app}>
+      <header className={css.topBar}>
+        <button
+          ref={menuRef}
+          type="button"
+          className={css.menuButton}
+          aria-label="Open problems"
+          aria-expanded={navOpen}
+          aria-controls="problem-nav"
+          onClick={() => setNavOpen(true)}
+        >
+          <svg viewBox="0 0 16 16" aria-hidden="true">
+            <path
+              d="M2 4.5h12M2 8h12M2 11.5h12"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="1.5"
+              strokeLinecap="round"
+            />
+          </svg>
+        </button>
+        <div className={css.topBarText}>
+          <p className={css.topBarTitle}>{selection?.label ?? 'Problems'}</p>
+          {selection?.variantLabel ? (
+            <p className={css.topBarMeta}>{selection.variantLabel}</p>
+          ) : null}
+        </div>
+        {selection ? (
+          <MarkButton
+            checked={Boolean(marked[selection.problemId])}
+            label={selection.label}
+            onToggle={() => toggleMarked(selection.problemId)}
+          />
+        ) : null}
+      </header>
+      <div className={css.backdrop} onClick={closeNav} />
+      <aside
+        id="problem-nav"
+        className={css.sidebar}
+        inert={isCompact && !navOpen ? true : undefined}
+      >
+        <div className={css.brand}>
+          <div className={css.brandMark} aria-hidden="true">
+            UI
+          </div>
+          <div className={css.brandCopy}>
+            <p className={css.brandTitle}>UI Interview</p>
+            <p className={css.brandMeta}>
+              {markedCount > 0
+                ? `${markedCount} of ${PROBLEM_COUNT} marked`
+                : `Practice lab · ${PROBLEM_COUNT} problems`}
+            </p>
+          </div>
+          <button
+            type="button"
+            className={css.closeNav}
+            aria-label="Close problems"
+            onClick={closeNav}
+          >
+            <svg viewBox="0 0 16 16" aria-hidden="true">
+              <path
+                d="M4 4 L12 12 M12 4 L4 12"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="1.5"
+                strokeLinecap="round"
+              />
+            </svg>
+          </button>
+        </div>
+        <label className={css.searchLabel}>
+          <span className={css.srOnly}>Find a problem</span>
+          <svg className={css.searchIcon} viewBox="0 0 16 16" aria-hidden="true">
+            <circle cx="7" cy="7" r="4.25" fill="none" stroke="currentColor" strokeWidth="1.5" />
+            <path
+              d="M10.5 10.5L13.5 13.5"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="1.5"
+              strokeLinecap="round"
+            />
+          </svg>
+          <input
+            ref={searchRef}
+            className={css.searchInput}
+            type="search"
+            placeholder="Find a problem"
+            value={query}
+            onChange={(event) => setQuery(event.target.value)}
+            spellCheck={false}
+          />
+        </label>
+        <nav className={css.nav} aria-label="Problems">
+          {hasResults ? (
+            visibleSections.map(({ sectionKey, section, visibleProblems }, sectionIndex) => (
               <div key={sectionKey}>
-                {showSeparator && <hr className={css.sectionDivider} />}
+                {sectionIndex > 0 && <hr className={css.sectionDivider} />}
                 <details
                   className={css.sidebarSection}
-                  open={openSections[sectionKey] ?? false}
-                  onToggle={(e) =>
-                    handleSectionToggle(sectionKey, (e.target as HTMLDetailsElement).open)
-                  }
+                  open={normalizedQuery !== '' || (openSections[sectionKey] ?? false)}
+                  onToggle={(event) => {
+                    if (normalizedQuery) return
+                    handleSectionToggle(sectionKey, (event.target as HTMLDetailsElement).open)
+                  }}
                 >
-                  <summary className={css.sectionTitle}>{section.title}</summary>
+                  <summary className={css.sectionTitle}>
+                    <span>{section.title}</span>
+                    <span className={css.sectionCount}>{visibleProblems.length}</span>
+                  </summary>
                   {Object.keys(section.items).length === 0 ? (
                     <p className={css.emptySection}>No items yet</p>
                   ) : (
                     <ul className={css.problemList}>
-                      {Object.entries(section.items).map(([problemId, problem], index) => (
-                        <li key={problemId} className={css.problemItem}>
-                          <details
-                            open={openProblems[problemId] ?? false}
-                            onToggle={(e) => {
-                              e.stopPropagation()
-                              handleProblemToggle(problemId, (e.target as HTMLDetailsElement).open)
-                            }}
-                          >
-                            <summary className={css.problemHeader}>
-                              <span className={css.problemName}>
-                                {/^\d/.test(problem.name)
-                                  ? problem.name
-                                  : `${index + 1}. ${problem.name}`}
-                              </span>
-                              <span className={`${css.chip} ${css[problem.difficulty]}`}>
-                                {problem.difficulty}
-                              </span>
-                            </summary>
-                            <ul className={css.variantList}>
-                              {(Object.keys(problem.variants) as TVariantType[]).map((variant) => (
-                                <li key={variant}>
-                                  <button
+                      {visibleProblems.map(({ problemId, problem, index }) => {
+                        const isCurrentProblem = selectedId.startsWith(`${problemId}:`)
+                        const label = problemLabel(problem.name, index)
+                        const isMarked = Boolean(marked[problemId])
+                        return (
+                          <li key={problemId} className={css.problemItem}>
+                            <div className={css.problemRow}>
+                              <MarkButton
+                                checked={isMarked}
+                                label={label}
+                                onToggle={() => toggleMarked(problemId)}
+                              />
+                              <details
+                                open={normalizedQuery !== '' || (openProblems[problemId] ?? false)}
+                                onToggle={(event) => {
+                                  event.stopPropagation()
+                                  if (normalizedQuery) return
+                                  handleProblemToggle(
+                                    problemId,
+                                    (event.target as HTMLDetailsElement).open,
+                                  )
+                                }}
+                              >
+                                <summary
+                                  className={`${css.problemHeader} ${isCurrentProblem ? css.problemHeaderCurrent : ''}`}
+                                >
+                                  <span
                                     className={
-                                      selectedId === `${problemId}:${variant}` ? css.active : ''
+                                      isMarked
+                                        ? `${css.problemName} ${css.problemNameMarked}`
+                                        : css.problemName
                                     }
-                                    onClick={() => handleSelectVariant(problemId, variant)}
                                   >
-                                    {variant === 'overview'
-                                      ? 'Problem Overview'
-                                      : variant === 'react'
-                                        ? 'Reference (React)'
-                                        : variant === 'vanilla'
-                                          ? 'Reference (Vanilla)'
-                                          : variant === 'studentReact'
-                                            ? 'Student (React)'
-                                            : variant === 'studentVanilla'
-                                              ? 'Student (Vanilla)'
-                                              : 'Example'}
-                                  </button>
-                                </li>
-                              ))}
-                            </ul>
-                          </details>
-                        </li>
-                      ))}
+                                    {label}
+                                  </span>
+                                  <span className={`${css.chip} ${css[problem.difficulty]}`}>
+                                    {problem.difficulty}
+                                  </span>
+                                </summary>
+                                <ul className={css.variantList}>
+                                  {(Object.keys(problem.variants) as TVariantType[]).map(
+                                    (variant) => {
+                                      const isActive = selectedId === `${problemId}:${variant}`
+                                      return (
+                                        <li key={variant}>
+                                          <button
+                                            className={isActive ? css.active : undefined}
+                                            aria-current={isActive ? 'page' : undefined}
+                                            data-active={isActive ? 'true' : undefined}
+                                            onClick={() => handleSelectVariant(problemId, variant)}
+                                          >
+                                            {VARIANT_LABELS[variant]}
+                                          </button>
+                                        </li>
+                                      )
+                                    },
+                                  )}
+                                </ul>
+                              </details>
+                            </div>
+                          </li>
+                        )
+                      })}
                     </ul>
                   )}
                 </details>
               </div>
-            )
-          })}
-        </div>
-        <div className={css.content}>
-          {/* eslint-disable-next-line react-hooks/static-components */}
-          {SelectedComponent ? <SelectedComponent /> : <NotFound />}
-        </div>
-      </div>
+            ))
+          ) : (
+            <p className={css.emptySearch}>No problems match “{query.trim()}”.</p>
+          )}
+        </nav>
+      </aside>
+      <main className={css.content}>
+        {/* eslint-disable-next-line react-hooks/static-components */}
+        {SelectedComponent ? <SelectedComponent /> : <NotFound />}
+      </main>
     </div>
   )
 }

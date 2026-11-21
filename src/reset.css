@@ -32,10 +32,17 @@ body,
 }
 
 body {
-  font-family: 'Roboto', sans-serif;
+  font-family: 'Instrument Sans', 'Roboto', sans-serif;
   line-height: 1.5;
+  background: #121110;
+  color: #1c1b19;
   -webkit-font-smoothing: antialiased;
   text-rendering: optimizeLegibility;
+}
+
+::selection {
+  background: #f6d7be;
+  color: #1c1b19;
 }
 
 /* Make images and media easier to work with */
